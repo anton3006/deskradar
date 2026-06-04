@@ -26,6 +26,7 @@ WebServer server(80);
 String accessToken = "";
 unsigned long tokenExpiryTime = 0;
 int pollInterval = 108000; // Default to 108 seconds (Guest 3-hour limit)
+unsigned long lastFetchTime = 0; // The "Stopwatch" memory
 bool isConfigured = false, needsReboot = false;
 String dynamicWifiOptions = "";
 
@@ -48,11 +49,12 @@ void setup() {
   pinMode(SETTINGS_BUTTON_PIN, INPUT_PULLUP);
   pinMode(21, OUTPUT); digitalWrite(21, HIGH); // Backlight
   
+  delay(1000); 
+  
   tft.init(); tft.setRotation(0); tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_GREEN, TFT_BLACK);
   tft.drawCentreString("SYSTEM BOOT...", 120, 110, 2);
 
-  // 1. Pull settings directly from Flash memory
   loadConfiguration();
 
   preferences.begin("radar-config", true);
@@ -60,7 +62,6 @@ void setup() {
   bool forcePortal = preferences.getBool("force_portal", false);
   preferences.end();
 
-  // 2. Clear manual portal override flag instantly if it was active
   if (forcePortal) {
     preferences.begin("radar-config", false); 
     preferences.putBool("force_portal", false); 
@@ -68,43 +69,51 @@ void setup() {
     isConfigured = false;
   }
 
-  // 3. Isolated Connection Phase (Increased timeout to 25 seconds for slow routers)
+  // 3. Isolated Connection Phase
   if (isConfigured && storedSsid.length() > 0) {
-    updateStatusScreen("CONNECTING...", storedSsid, TFT_GREEN);
-    
+    WiFi.persistent(false); 
     WiFi.mode(WIFI_STA); 
-    WiFi.disconnect(); // Soft disconnect to clear state without killing the antenna
-    delay(100);
-    WiFi.begin(storedSsid.c_str(), storedPass.c_str()); 
-    
-    int timeout = 0;
-    // 50 loops * 500ms = 25 seconds wait time
-    while (WiFi.status() != WL_CONNECTED && timeout < 50) { 
+    WiFi.setHostname("DeskRadar");
+
+    for (int attempt = 1; attempt <= 3; attempt++) {
+      if (attempt == 1) {
+        updateStatusScreen("CONNECTING...", storedSsid, TFT_GREEN);
+      } else {
+        updateStatusScreen("REBOOTING RADIO...", "Attempt " + String(attempt) + "/3", TFT_GREEN);
+      }
+
+      WiFi.disconnect(); 
       delay(500); 
-      Serial.print(".");
-      timeout++; 
+      WiFi.begin(storedSsid.c_str(), storedPass.c_str()); 
+      
+      int timeout = 0;
+      while (WiFi.status() != WL_CONNECTED && timeout < 24) { 
+        delay(500); 
+        timeout++; 
+      }
+
+      if (WiFi.status() == WL_CONNECTED) break; 
     }
   }
 
-  // 4. Fallback to Portal Phase (Scanning only happens here if connection failed)
+  // 4. Fallback to Portal Phase
   if (WiFi.status() != WL_CONNECTED) {
     isConfigured = false;
-    
     updateStatusScreen("WIFI FAILED", "Scanning Rooms...", TFT_GREEN);
-    
     runNetworkScan();
-    
     WiFi.mode(WIFI_AP);
     WiFi.softAP("DeskRadar-Setup");
     
     server.on("/", [](){
+      String defaultOption = (storedSsid.length() > 0) ? "<option value=''>-- Keep Saved (" + storedSsid + ") --</option>" : "<option value=''>-- Select Network --</option>";
+      
       String html = "<html><head><meta name='viewport' content='width=device-width, initial-scale=1.0'>"
                     "<style>body{background:#000;color:#0f0;font-family:sans-serif;padding:20px;} input, select, button {margin-top:5px; padding:8px;} hr{border-color:#0f0;}</style></head><body>"
                     "<h2>DeskRadar Setup</h2><form action='/save' method='POST'>"
                     "<label>Device PIN:</label><br><input type='password' name='pin' style='width:100%;' required><hr>"
                     
                     "<label>Select WiFi Network:</label><br>"
-                    "<select name='ssid' style='width:100%;'>" + dynamicWifiOptions + "</select><br><br>"
+                    "<select name='ssid' style='width:100%;'>" + defaultOption + dynamicWifiOptions + "</select><br><br>"
                     
                     "<label>WiFi Password:</label><br>"
                     "<div style='display:flex; align-items:center;'>"
@@ -116,10 +125,10 @@ void setup() {
                     "<label>Longitude:</label><br><input type='text' name='lon' value='" + String(radarLon, 4) + "' style='width:100%;' required><br><br>"
                     "<label>Range (KM):</label><br><input type='number' name='range' value='" + String((int)maxRadarRangeKm) + "' style='width:100%;' required><hr>"
                     
-                    "<label>OpenSky Email (Optional):</label><br><input type='text' name='oid' style='width:100%;'><br><br>"
+                    "<label>OpenSky Email (Optional):</label><br><input type='text' name='oid' value='" + (apiType == "auth" ? storedClientId.substring(0, storedClientId.indexOf("-api-client")) : "") + "' style='width:100%;'><br><br>"
                     "<label>Secret Key:</label><br>"
                     "<div style='display:flex; align-items:center;'>"
-                    "<input type='password' id='op' name='osec' style='flex-grow:1;'>"
+                    "<input type='password' id='op' name='osec' value='" + storedClientSecret + "' style='flex-grow:1;'>"
                     "<input type='checkbox' onclick='document.getElementById(\"op\").type=this.checked?\"text\":\"password\"' style='margin-left:10px;'> Show"
                     "</div><br><br>"
                     
@@ -147,6 +156,8 @@ void setup() {
         preferences.putString("client_secret", server.arg("osec"));
       } else {
         preferences.putString("api_type", "guest");
+        preferences.putString("client_id", "");
+        preferences.putString("client_secret", "");
       }
       preferences.end();
       
@@ -159,47 +170,79 @@ void setup() {
   } else {
     tft.fillScreen(TFT_BLACK); drawRadarGrid();
     isConfigured = true;
-    // Set active polling interval based on auth state
     pollInterval = (apiType == "auth") ? 11000 : 108000;
   }
 }
 
 void loop() {
-  // Manual re-entry trigger: Hold BOOT for 3 seconds
+  // --- 1. INSTANT BUTTON CHECK ---
   if (digitalRead(SETTINGS_BUTTON_PIN) == LOW) {
-    delay(3000);
-    preferences.begin("radar-config", false); preferences.putBool("force_portal", true); preferences.end();
-    ESP.restart();
+    unsigned long pressTime = millis();
+    bool actuallyHeld = true;
+    
+    // Require user to physically hold it down for 3 solid seconds
+    while (millis() - pressTime < 3000) {
+      if (digitalRead(SETTINGS_BUTTON_PIN) == HIGH) {
+        actuallyHeld = false; 
+        break; 
+      }
+      delay(10); // Tiny debounce delay
+    }
+
+    if (actuallyHeld) {
+      updateStatusScreen("SETTINGS MODE", "Rebooting...", TFT_GREEN);
+      preferences.begin("radar-config", false); 
+      preferences.putBool("force_portal", true); 
+      preferences.end();
+      delay(1000);
+      ESP.restart();
+    }
   }
 
-  if (isConfigured) {
-    if (WiFi.status() == WL_CONNECTED) {
-      if (apiType == "auth" && (accessToken == "" || millis() >= tokenExpiryTime)) {
-        tft.fillRect(20, 110, 200, 20, TFT_BLACK);
-        tft.drawCentreString("Authenticating...", 120, 112, 1);
-        if (!refreshOpenSkyToken()) {
-          delay(10000); 
-          return; 
-        }
-      }
-      fetchAndMapFlights();
-      delay(pollInterval); 
-    } else { 
-      // Reconnection logic if router reboots while device is on
-      WiFi.disconnect();
-      WiFi.begin(storedSsid.c_str(), storedPass.c_str()); 
-      delay(10000); // Wait 10s between retry attempts to not spam the router
-    }
-  } else {
+  // --- 2. SETUP PORTAL LOGIC ---
+  if (!isConfigured) {
     server.handleClient();
     if (needsReboot) {
       delay(2000); 
       ESP.restart(); 
     }
+    return; // Don't run any radar code while in portal mode
+  }
+
+  // --- 3. RADAR & NETWORK LOGIC ---
+  if (WiFi.status() != WL_CONNECTED) {
+    WiFi.disconnect();
+    delay(500);
+    WiFi.begin(storedSsid.c_str(), storedPass.c_str()); 
+    // Wait up to 10 seconds to restore dropped connection
+    for (int i = 0; i < 20; i++) {
+      if (WiFi.status() == WL_CONNECTED) break;
+      delay(500);
+    }
+    if (WiFi.status() != WL_CONNECTED) delay(5000); // Back off if router is dead
+    return;
+  }
+
+  // --- 4. THE NON-BLOCKING STOPWATCH ---
+  // If this is our very first run, OR the timer has reached 108 seconds:
+  if (lastFetchTime == 0 || millis() - lastFetchTime >= pollInterval) {
+    
+    if (apiType == "auth" && (accessToken == "" || millis() >= tokenExpiryTime)) {
+      tft.fillRect(20, 110, 200, 20, TFT_BLACK);
+      tft.drawCentreString("Authenticating...", 120, 112, 1);
+      if (!refreshOpenSkyToken()) {
+        lastFetchTime = millis() - pollInterval + 10000; // Try again in 10s if failed
+        return; 
+      }
+    }
+
+    fetchAndMapFlights(); // Pull the data and draw the screen
+    lastFetchTime = millis(); // Reset the stopwatch!
   }
 }
 
 void runNetworkScan() {
+  WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
   delay(100);
@@ -207,9 +250,7 @@ void runNetworkScan() {
   int n = WiFi.scanNetworks();
   dynamicWifiOptions = "";
   
-  if (n <= 0) {
-    dynamicWifiOptions = "<option value=''>No local networks found</option>";
-  } else {
+  if (n > 0) {
     for (int i = 0; i < n; ++i) {
       if(WiFi.SSID(i).length() > 0) {
         dynamicWifiOptions += "<option value='" + WiFi.SSID(i) + "'>" + WiFi.SSID(i) + " (" + String(WiFi.RSSI(i)) + "dBm)</option>";
@@ -235,7 +276,6 @@ void fetchAndMapFlights() {
   
   int httpCode = http.GET();
   if (httpCode == 200) {
-    // Dynamically apply the 3-hour limit logic
     pollInterval = (apiType == "auth") ? 11000 : 108000; 
     
     JsonDocument doc; deserializeJson(doc, http.getString());
@@ -284,7 +324,7 @@ void fetchAndMapFlights() {
     tft.drawCentreString("TARGETS: " + String(planeCount), 120, 200, 1);
   } else if (httpCode == 429) {
     tft.drawCentreString("RATE LIMIT: COOLDOWN", 120, 200, 1);
-    pollInterval = 60000; // 1 min penalty cooldown
+    pollInterval = 60000; 
   } else {
     tft.drawCentreString("API ERR: " + String(httpCode), 120, 200, 1);
     pollInterval = 15000; 
