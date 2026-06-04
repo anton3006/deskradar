@@ -1,5 +1,6 @@
 #include <FS.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h> // Required for handling secure HTTPS handshakes
 #include <WebServer.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
@@ -9,7 +10,7 @@
 #include <Preferences.h>
 
 // --- Settings & Security ---
-const bool USE_METRIC = true; // Set to false to display altitude in Feet
+const bool USE_METRIC = false; // Set to false to display altitude in Feet
 const int SETTINGS_BUTTON_PIN = 0; 
 const char* DEVICE_PIN = "1234"; 
 
@@ -25,7 +26,7 @@ WebServer server(80);
 
 String accessToken = "";
 unsigned long tokenExpiryTime = 0;
-int pollInterval = 108000; // Default to 108 seconds (Guest 3-hour limit)
+int pollInterval = 12000; // Default to 12 seconds
 unsigned long lastFetchTime = 0; // The "Stopwatch" memory
 bool isConfigured = false, needsReboot = false;
 String dynamicWifiOptions = "";
@@ -277,7 +278,10 @@ void drawRadarGrid() {
 
 void fetchAndMapFlights() {
   HTTPClient http;
-  http.begin("https://opensky-network.org/api/states/all?lamin=" + lamin + "&lomin=" + lomin + "&lamax=" + lamax + "&lomax=" + lomax);
+  WiFiClientSecure client;
+  client.setInsecure(); // Bypass the certificate validation matrix for tracking queries
+
+  http.begin(client, "https://opensky-network.org/api/states/all?lamin=" + lamin + "&lomin=" + lomin + "&lamax=" + lamax + "&lomax=" + lomax);
   if (apiType == "auth") http.addHeader("Authorization", "Bearer " + accessToken);
   
   int httpCode = http.GET();
@@ -357,19 +361,4 @@ void calculateBoundingBox(float lat, float lon, float rangeKm) {
   float dL = rangeKm / 111.1;
   lamin = String(lat - dL, 4); 
   lamax = String(lat + dL, 4);
-  lomin = String(lon - (rangeKm / (111.1 * cos(lat * PI / 180.0))), 4);
-  lomax = String(lon + (rangeKm / (111.1 * cos(lat * PI / 180.0))), 4);
-}
-
-bool refreshOpenSkyToken() {
-  HTTPClient http;
-  http.begin("https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token");
-  http.addHeader("Content-Type", "application/x-www-form-urlencoded");
-  if (http.POST("grant_type=client_credentials&client_id=" + storedClientId + "&client_secret=" + storedClientSecret) == 200) {
-    JsonDocument doc; deserializeJson(doc, http.getString());
-    accessToken = doc["access_token"].as<String>();
-    tokenExpiryTime = millis() + ((doc["expires_in"].as<long>() - 60) * 1000);
-    return true;
-  }
-  return false;
-}
+  lomin = String(lon - (rangeKm / (111.1 * cos(lat *
