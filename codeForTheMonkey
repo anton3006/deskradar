@@ -361,4 +361,31 @@ void calculateBoundingBox(float lat, float lon, float rangeKm) {
   float dL = rangeKm / 111.1;
   lamin = String(lat - dL, 4); 
   lamax = String(lat + dL, 4);
-  lomin = String(lon - (rangeKm / (111.1 * cos(lat *
+  lomin = String(lon - (rangeKm / (111.1 * cos(lat * PI / 180.0))), 4);
+  lomax = String(lon + (rangeKm / (111.1 * cos(lat * PI / 180.0))), 4);
+}
+
+bool refreshOpenSkyToken() {
+  HTTPClient http;
+  WiFiClientSecure client;
+  client.setInsecure(); // Bypass SSL verification protocols to pass credential payloads cleanly
+
+  http.begin(client, "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token");
+  http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+  
+  int httpCode = http.POST("grant_type=client_credentials&client_id=" + storedClientId + "&client_secret=" + storedClientSecret);
+  
+  if (httpCode == 200) {
+    JsonDocument doc; deserializeJson(doc, http.getString());
+    accessToken = doc["access_token"].as<String>();
+    tokenExpiryTime = millis() + ((doc["expires_in"].as<long>() - 60) * 1000);
+    http.end();
+    return true;
+  }
+  
+  Serial.print("Authentication Error Trace. HTTP Code Status: ");
+  Serial.println(httpCode);
+  
+  http.end();
+  return false;
+}
