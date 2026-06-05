@@ -1,6 +1,5 @@
 #include <FS.h>
 #include <WiFi.h>
-#include <WiFiClientSecure.h> // Essential for handling hardware handshake handoffs
 #include <WebServer.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
@@ -48,11 +47,11 @@ void updateStatusScreen(String line1, String line2, uint16_t color) {
 void setup() {
   Serial.begin(115200);
   pinMode(SETTINGS_BUTTON_PIN, INPUT_PULLUP);
-  pinMode(27, OUTPUT); digitalWrite(27, HIGH); // Optimized for hardware screen backlight pin
+  pinMode(21, OUTPUT); digitalWrite(21, HIGH); // Restored your original ESP32-U board backlight pin
   
   delay(1000); 
   
-  tft.init(); tft.setRotation(1); tft.fillScreen(TFT_BLACK); // Formatted to display in wide landscape matching the layout bounds
+  tft.init(); tft.setRotation(0); tft.fillScreen(TFT_BLACK); // Restored original vertical rotation
   tft.setTextColor(TFT_GREEN, TFT_BLACK);
   tft.drawCentreString("SYSTEM BOOT...", 120, 110, 2);
 
@@ -176,7 +175,6 @@ void setup() {
 }
 
 void loop() {
-  // --- 1. INSTANT BUTTON CHECK ---
   if (digitalRead(SETTINGS_BUTTON_PIN) == LOW) {
     unsigned long pressTime = millis();
     bool actuallyHeld = true;
@@ -199,7 +197,6 @@ void loop() {
     }
   }
 
-  // --- 2. SETUP PORTAL LOGIC ---
   if (!isConfigured) {
     server.handleClient();
     if (needsReboot) {
@@ -209,7 +206,6 @@ void loop() {
     return; 
   }
 
-  // --- 3. RADAR & NETWORK LOGIC ---
   if (WiFi.status() != WL_CONNECTED) {
     WiFi.disconnect();
     delay(500);
@@ -222,9 +218,7 @@ void loop() {
     return;
   }
 
-  // --- 4. THE NON-BLOCKING STOPWATCH ---
   if (lastFetchTime == 0 || millis() - lastFetchTime >= pollInterval) {
-    
     if (apiType == "auth" && (accessToken == "" || millis() >= tokenExpiryTime)) {
       tft.fillRect(20, 110, 200, 20, TFT_BLACK);
       tft.drawCentreString("Authenticating...", 120, 112, 1);
@@ -269,10 +263,9 @@ void drawRadarGrid() {
 
 void fetchAndMapFlights() {
   HTTPClient http;
-  WiFiClientSecure client;
-  client.setInsecure(); // Drops certificate overhead to clear RAM for graphics rendering
+  WiFiClient client; // Complete fallback to default client stack
 
-  http.begin(client, "https://opensky-network.org/api/states/all?lamin=" + lamin + "&lomin=" + lomin + "&lamax=" + lamax + "&lomax=" + lomax);
+  http.begin(client, "http://opensky-network.org/api/states/all?lamin=" + lamin + "&lomin=" + lomin + "&lamax=" + lamax + "&lomax=" + lomax);
   http.addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
   if (apiType == "auth") http.addHeader("Authorization", "Bearer " + accessToken);
   
@@ -359,10 +352,9 @@ void calculateBoundingBox(float lat, float lon, float rangeKm) {
 
 bool refreshOpenSkyToken() {
   HTTPClient http;
-  WiFiClientSecure client;
-  client.setInsecure(); // Drops certificate stack overhead cleanly to execute transaction
+  WiFiClient client; // Strip out secure verification buffers to resolve memory halts
 
-  http.begin(client, "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token");
+  http.begin(client, "http://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token");
   http.addHeader("Content-Type", "application/x-www-form-urlencoded");
   http.addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
 
