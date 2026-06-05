@@ -1,6 +1,6 @@
 #include <FS.h>
 #include <WiFi.h>
-#include <WiFiClientSecure.h> // Required for processing encrypted TLS api streams
+#include <WiFiClientSecure.h> // Kept to process encrypted TLS streams and avoid 308 errors
 #include <WebServer.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
@@ -10,7 +10,7 @@
 #include <Preferences.h>
 
 // --- Settings & Security ---
-const bool USE_METRIC = false; // Set to false to display altitude in Feet
+const bool USE_METRIC = true; // Restored from Code 2
 const int SETTINGS_BUTTON_PIN = 0; 
 const char* DEVICE_PIN = "1234"; 
 
@@ -26,12 +26,12 @@ WebServer server(80);
 
 String accessToken = "";
 unsigned long tokenExpiryTime = 0;
-int pollInterval = 12000; // 12 seconds tracking interval
+int pollInterval = 108000; // Restored from Code 2
 unsigned long lastFetchTime = 0; // The "Stopwatch" memory
 bool isConfigured = false, needsReboot = false;
 String dynamicWifiOptions = "";
 
-// Dynamic layout dimensions for 480x320 Landscape grid
+// Dynamic layout dimensions for 480x320 Landscape grid (From Code 1)
 const int GRID_CENTER_X = 240; 
 const int GRID_CENTER_Y = 160;
 
@@ -53,14 +53,14 @@ void setup() {
   Serial.begin(115200);
   pinMode(SETTINGS_BUTTON_PIN, INPUT_PULLUP);
   
-  // Hardware Backlight configuration mapped to physical IO27
+  // Hardware Backlight configuration mapped to physical IO27 (From Code 1)
   pinMode(27, OUTPUT); 
   digitalWrite(27, HIGH); 
   
   delay(1000); 
   
   tft.init(); 
-  tft.setRotation(1); // Forces the screen to render in wide Landscape Mode (480x320)
+  tft.setRotation(1); // Landscape mode (From Code 1)
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_GREEN, TFT_BLACK);
   tft.drawCentreString("SYSTEM BOOT...", GRID_CENTER_X, GRID_CENTER_Y - 10, 2);
@@ -135,6 +135,7 @@ void setup() {
                     "<label>Longitude:</label><br><input type='text' name='lon' value='" + String(radarLon, 4) + "' style='width:100%;' required><br><br>"
                     "<label>Range (KM):</label><br><input type='number' name='range' value='" + String((int)maxRadarRangeKm) + "' style='width:100%;' required><hr>"
                     
+                    // Restored from Code 2: Auto-handles reading the string for display
                     "<label>OpenSky Email (Optional):</label><br><input type='text' name='oid' value='" + (apiType == "auth" ? storedClientId.substring(0, storedClientId.indexOf("-api-client")) : "") + "' style='width:100%;'><br><br>"
                     "<label>Secret Key:</label><br>"
                     "<div style='display:flex; align-items:center;'>"
@@ -162,6 +163,7 @@ void setup() {
 
       if(server.arg("oid").length() > 0) {
         preferences.putString("api_type", "auth");
+        // Restored from Code 2: Automatically appends -api-client to whatever you type in
         preferences.putString("client_id", server.arg("oid") + "-api-client");
         preferences.putString("client_secret", server.arg("osec"));
       } else {
@@ -180,7 +182,7 @@ void setup() {
   } else {
     tft.fillScreen(TFT_BLACK); drawRadarGrid();
     isConfigured = true;
-    pollInterval = (apiType == "auth") ? 12000 : 108000;
+    pollInterval = (apiType == "auth") ? 11000 : 108000; // Restored from Code 2
   }
 }
 
@@ -237,9 +239,8 @@ void loop() {
     if (apiType == "auth" && (accessToken == "" || millis() >= tokenExpiryTime)) {
       tft.fillRect(GRID_CENTER_X - 100, GRID_CENTER_Y - 10, 200, 20, TFT_BLACK);
       tft.drawCentreString("Authenticating...", GRID_CENTER_X, GRID_CENTER_Y - 8, 1);
-      
       if (!refreshOpenSkyToken()) {
-        lastFetchTime = millis() - pollInterval + 30000; // Back off on connection delay
+        lastFetchTime = millis() - pollInterval + 10000; // Restored from Code 2
         return; 
       }
     }
@@ -280,15 +281,15 @@ void drawRadarGrid() {
 void fetchAndMapFlights() {
   HTTPClient http;
   WiFiClientSecure client;
-  client.setInsecure(); // Wipes SSL handshake validation locks to process https cleanly
+  client.setInsecure(); // This MUST remain here to stop the API ERR: 308 bug
 
   http.begin(client, "https://opensky-network.org/api/states/all?lamin=" + lamin + "&lomin=" + lomin + "&lamax=" + lamax + "&lomax=" + lomax);
-  http.addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+  http.addHeader("User-Agent", "Mozilla/5.0"); // Keep bare minimum to prevent 403 blocks
   if (apiType == "auth") http.addHeader("Authorization", "Bearer " + accessToken);
   
   int httpCode = http.GET();
   if (httpCode == 200) {
-    pollInterval = (apiType == "auth") ? 12000 : 108000; 
+    pollInterval = (apiType == "auth") ? 11000 : 108000; // Restored from Code 2
     
     JsonDocument doc; deserializeJson(doc, http.getString());
     tft.fillScreen(TFT_BLACK); 
@@ -370,25 +371,19 @@ void calculateBoundingBox(float lat, float lon, float rangeKm) {
 bool refreshOpenSkyToken() {
   HTTPClient http;
   WiFiClientSecure client;
-  client.setInsecure(); // Wipes SSL verification bottlenecks inside authentication phase
+  client.setInsecure(); // This MUST remain here to stop the API ERR: 308 bug
 
   http.begin(client, "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token");
   http.addHeader("Content-Type", "application/x-www-form-urlencoded");
-  http.addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
-
-  String postData = "grant_type=client_credentials&client_id=" + storedClientId + "&client_secret=" + storedClientSecret;
   
-  int httpCode = http.POST(postData);
-  if (httpCode == 200) {
+  // Restored from Code 2: Your exact POST logic
+  if (http.POST("grant_type=client_credentials&client_id=" + storedClientId + "&client_secret=" + storedClientSecret) == 200) {
     JsonDocument doc; deserializeJson(doc, http.getString());
     accessToken = doc["access_token"].as<String>();
     tokenExpiryTime = millis() + ((doc["expires_in"].as<long>() - 60) * 1000);
     http.end();
     return true;
   }
-  
-  Serial.print("Auth failed with HTTP code: ");
-  Serial.println(httpCode);
   http.end();
   return false;
 }
