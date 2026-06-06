@@ -342,4 +342,43 @@ void fetchAndMapFlights() {
 
 void loadConfiguration() {
   preferences.begin("radar-config", true);
-  radarLat = preferences.getFloat("lat", 56.92
+  radarLat = preferences.getFloat("lat", 56.9236);
+  radarLon = preferences.getFloat("lon", 23.9711);
+  maxRadarRangeKm = preferences.getFloat("range", 200.0);
+  apiType = preferences.getString("api_type", "guest");
+  storedClientId = preferences.getString("client_id", "");
+  storedClientSecret = preferences.getString("client_secret", "");
+  storedSsid = preferences.getString("ssid", "");
+  storedPass = preferences.getString("pass", "");
+  preferences.end();
+  
+  calculateBoundingBox(radarLat, radarLon, maxRadarRangeKm);
+}
+
+void calculateBoundingBox(float lat, float lon, float rangeKm) {
+  float dL = rangeKm / 111.1;
+  lamin = String(lat - dL, 4); 
+  lamax = String(lat + dL, 4);
+  lomin = String(lon - (rangeKm / (111.1 * cos(lat * PI / 180.0))), 4);
+  lomax = String(lon + (rangeKm / (111.1 * cos(lat * PI / 180.0))), 4);
+}
+
+bool refreshOpenSkyToken() {
+  HTTPClient http;
+  WiFiClientSecure client;
+  client.setInsecure(); // This MUST be here to bypass the API ERR: 308
+
+  http.begin(client, "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token");
+  http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+  http.addHeader("User-Agent", "Mozilla/5.0");
+  
+  if (http.POST("grant_type=client_credentials&client_id=" + storedClientId + "&client_secret=" + storedClientSecret) == 200) {
+    JsonDocument doc; deserializeJson(doc, http.getString());
+    accessToken = doc["access_token"].as<String>();
+    tokenExpiryTime = millis() + ((doc["expires_in"].as<long>() - 60) * 1000);
+    http.end();
+    return true;
+  }
+  http.end();
+  return false;
+}
