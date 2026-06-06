@@ -1,6 +1,6 @@
 #include <FS.h>
 #include <WiFi.h>
-#include <WiFiClientSecure.h> // Essential to fix the API ERR: 308 shown in your photo
+#include <WiFiClientSecure.h>
 #include <WebServer.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
@@ -10,7 +10,7 @@
 #include <Preferences.h>
 
 // --- Settings & Security ---
-const bool USE_METRIC = true; // Retained from your code
+const bool USE_METRIC = true;
 const int SETTINGS_BUTTON_PIN = 0; 
 const char* DEVICE_PIN = "1234"; 
 
@@ -26,14 +26,14 @@ WebServer server(80);
 
 String accessToken = "";
 unsigned long tokenExpiryTime = 0;
-int pollInterval = 108000; // Retained from your code (Guest 3-hour limit)
-unsigned long lastFetchTime = 0; // The "Stopwatch" memory
+int pollInterval = 108000; 
+unsigned long lastFetchTime = 0; 
 bool isConfigured = false, needsReboot = false;
 String dynamicWifiOptions = "";
 
-// Dynamic layout dimensions for 480x320 Landscape grid (Hardware Fix)
-const int GRID_CENTER_X = 240; 
-const int GRID_CENTER_Y = 160;
+// Dynamic layout dimensions FIXED for 240x240 Round Display
+const int GRID_CENTER_X = 120; 
+const int GRID_CENTER_Y = 120;
 
 void drawRadarGrid();
 void fetchAndMapFlights();
@@ -53,14 +53,10 @@ void setup() {
   Serial.begin(115200);
   pinMode(SETTINGS_BUTTON_PIN, INPUT_PULLUP);
   
-  // Hardware Backlight configuration mapped to physical IO27 for 4.0" Display
-  pinMode(27, OUTPUT); 
-  digitalWrite(27, HIGH); 
-  
   delay(1000); 
   
   tft.init(); 
-  tft.setRotation(1); // Set to wide Landscape mode to fix the squished circle
+  // tft.setRotation(1); // Removed: Not needed for the round display
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_GREEN, TFT_BLACK);
   tft.drawCentreString("SYSTEM BOOT...", GRID_CENTER_X, GRID_CENTER_Y - 10, 2);
@@ -135,7 +131,6 @@ void setup() {
                     "<label>Longitude:</label><br><input type='text' name='lon' value='" + String(radarLon, 4) + "' style='width:100%;' required><br><br>"
                     "<label>Range (KM):</label><br><input type='number' name='range' value='" + String((int)maxRadarRangeKm) + "' style='width:100%;' required><hr>"
                     
-                    // Retained your exact portal logic for the Email string
                     "<label>OpenSky Email (Optional):</label><br><input type='text' name='oid' value='" + (apiType == "auth" ? storedClientId.substring(0, storedClientId.indexOf("-api-client")) : "") + "' style='width:100%;'><br><br>"
                     "<label>Secret Key:</label><br>"
                     "<div style='display:flex; align-items:center;'>"
@@ -163,7 +158,6 @@ void setup() {
 
       if(server.arg("oid").length() > 0) {
         preferences.putString("api_type", "auth");
-        // Retained your exact saving logic that automatically appends "-api-client"
         preferences.putString("client_id", server.arg("oid") + "-api-client");
         preferences.putString("client_secret", server.arg("osec"));
       } else {
@@ -182,7 +176,7 @@ void setup() {
   } else {
     tft.fillScreen(TFT_BLACK); drawRadarGrid();
     isConfigured = true;
-    pollInterval = (apiType == "auth") ? 11000 : 108000; // Retained your polling values
+    pollInterval = (apiType == "auth") ? 11000 : 108000; 
   }
 }
 
@@ -276,7 +270,7 @@ void drawRadarGrid() {
 void fetchAndMapFlights() {
   HTTPClient http;
   WiFiClientSecure client;
-  client.setInsecure(); // This MUST be here to bypass the API ERR: 308
+  client.setInsecure(); 
 
   http.begin(client, "https://opensky-network.org/api/states/all?lamin=" + lamin + "&lomin=" + lomin + "&lamax=" + lamax + "&lomax=" + lomax);
   http.addHeader("User-Agent", "Mozilla/5.0"); 
@@ -290,6 +284,8 @@ void fetchAndMapFlights() {
     tft.fillScreen(TFT_BLACK); 
     drawRadarGrid();
     tft.setTextColor(TFT_GREEN, TFT_BLACK); 
+    
+    // Title pushed down slightly so it isn't cut off by the top curve
     tft.drawCentreString("DESK RADAR", GRID_CENTER_X, 15, 2);
     
     JsonArray states = doc["states"].as<JsonArray>();
@@ -329,12 +325,13 @@ void fetchAndMapFlights() {
       tft.drawString(callsign, x+5, y-12, 1);
       tft.drawString(altStr + " " + country, x+5, y, 1);
     }
-    tft.drawCentreString("TARGETS: " + String(planeCount), GRID_CENTER_X, 295, 1);
+    // Fixed Y coordinate so it fits on the 240px tall screen
+    tft.drawCentreString("TARGETS: " + String(planeCount), GRID_CENTER_X, 225, 1);
   } else if (httpCode == 429) {
-    tft.drawCentreString("RATE LIMIT: COOLDOWN", GRID_CENTER_X, 295, 1);
+    tft.drawCentreString("RATE LIMIT: COOLDOWN", GRID_CENTER_X, 225, 1);
     pollInterval = 60000; 
   } else {
-    tft.drawCentreString("API ERR: " + String(httpCode), GRID_CENTER_X, 295, 1);
+    tft.drawCentreString("API ERR: " + String(httpCode), GRID_CENTER_X, 225, 1);
     pollInterval = 15000; 
   }
   http.end();
@@ -342,6 +339,7 @@ void fetchAndMapFlights() {
 
 void loadConfiguration() {
   preferences.begin("radar-config", true);
+  // Default coordinates fall back to Riga, Latvia if the portal isn't used
   radarLat = preferences.getFloat("lat", 56.9236);
   radarLon = preferences.getFloat("lon", 23.9711);
   maxRadarRangeKm = preferences.getFloat("range", 200.0);
@@ -366,7 +364,7 @@ void calculateBoundingBox(float lat, float lon, float rangeKm) {
 bool refreshOpenSkyToken() {
   HTTPClient http;
   WiFiClientSecure client;
-  client.setInsecure(); // This MUST be here to bypass the API ERR: 308
+  client.setInsecure(); 
 
   http.begin(client, "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token");
   http.addHeader("Content-Type", "application/x-www-form-urlencoded");
